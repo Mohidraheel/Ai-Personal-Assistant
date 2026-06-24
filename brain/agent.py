@@ -3,7 +3,7 @@ import json
 import config
 from brain import tools as tool_module
 from brain import computer
-
+from brain import morning_brief as mb
 client = OpenAI(api_key=config.OPENAI_API_KEY)
 
 TOOLS = [
@@ -122,8 +122,34 @@ TOOLS = [
             "description": "Take a screenshot and save it to the Desktop.",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
+    },
+    
+    {
+        "type": "function",
+        "function": {
+            "name": "update_brief_topics",
+            "description": "Update morning brief topics when user wants to change them.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topics": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["topics"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_morning_brief",
+            "description": "Fetch and generate morning news brief when user asks for it.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
     }
-]
+     ]
 
 def _execute_tool(name: str, arguments: dict) -> str:
     if name == "web_search":
@@ -144,6 +170,14 @@ def _execute_tool(name: str, arguments: dict) -> str:
         return computer.get_volume(arguments["action"], arguments.get("level"))
     elif name == "take_screenshot":
         return computer.take_screenshot()
+    elif name == "update_brief_topics":
+        mb.update_topics(arguments["topics"])
+        return f"Topics updated: {', '.join(arguments['topics'])}"
+    elif name == "get_morning_brief":
+        prefs = mb.get_preferences()
+        topics = prefs.get("topics", ["tech news"])
+        lang = prefs.get("language", "en")
+        return mb.generate_brief(topics, lang)
     return "Unknown tool."
 
 class Agent:

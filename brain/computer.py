@@ -8,7 +8,7 @@ APP_ALIASES = {
     # Games & Launchers
     "steam":        r"D:\Program Files (x86)\steam.exe",
     "epic":         r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win32\EpicGamesLauncher.exe",
-    "discord":      r"C:\Users\pc\AppData\Local\Discord\Update.exe --processStart Discord.exe",
+    "discord":      r"C:\Users\pc\AppData\Local\Discord\app-1.0.9242\Discord.exe",
     "minecraft":    r"C:\Program Files (x86)\Minecraft Launcher\MinecraftLauncher.exe",
 
     # Browsers

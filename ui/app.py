@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from brain.agent import Agent
 from brain import tools as tool_module
+from brain import morning_brief as mb
 import voice.listener as listener
 import voice.speaker as speaker
 
@@ -34,6 +35,7 @@ FONT_TITLE = ("Segoe UI", 13, "bold")
 class AssistantApp:
     def __init__(self, root: tk.Tk):
         self.root = root
+        self.state = "normal"
         self.root.title(config.APP_NAME)
         self.root.geometry("780x680")
         self.root.minsize(620, 500)
@@ -47,6 +49,9 @@ class AssistantApp:
         self._build_ui()
         self._register_reminder_callback()
         self._poll_queue()
+
+        # Escape key to stop speaking
+        self.root.bind("<Escape>", lambda e: self._stop_speaking())
 
     def _build_ui(self):
         # Top bar
@@ -89,7 +94,8 @@ class AssistantApp:
         self.chat_canvas.bind("<MouseWheel>", lambda e: self.chat_canvas.yview_scroll(
             -1 * (e.delta // 120), "units"))
 
-        self._add_system_message("Press 🎤 or type a message to begin.")
+        self._add_system_message("Press 🎤 or type a message. Speak in any language!")
+        self.root.after(800, self._start_morning_flow)
 
         # Bottom bar
         tk.Frame(self.root, bg=BORDER, height=1).pack(fill=tk.X)
@@ -114,7 +120,91 @@ class AssistantApp:
                                    relief=tk.FLAT, font=FONT_BODY, cursor="hand2",
                                    activebackground=ACCENT_DIM, activeforeground=TEXT_PRI,
                                    command=self._on_send, padx=16)
-        self.send_btn.pack(side=tk.LEFT, ipady=9, padx=(0, 16))
+        self.send_btn.pack(side=tk.LEFT, ipady=9, padx=(0, 8))
+
+        # Stop button
+        self.stop_btn = tk.Button(bottom, text="⏹ Stop",
+                                   bg="#3a1a1a", fg=DANGER, relief=tk.FLAT,
+                                   font=FONT_BODY, cursor="hand2",
+                                   activebackground=DANGER, activeforeground=TEXT_PRI,
+                                   command=self._stop_speaking, padx=12)
+        self.stop_btn.pack(side=tk.LEFT, ipady=9, padx=(0, 16))
+
+    # ── Stop Speaking ─────────────────────────────────────────────────────────
+
+    def _stop_speaking(self):
+        speaker.stop()
+        self.is_processing = False
+        self.send_btn.config(state=tk.NORMAL)
+        self.mic_btn.config(state=tk.NORMAL)
+        self._set_status("Stopped.", TEXT_HINT)
+        self._remove_typing_indicator()
+
+    # ── Morning Brief ─────────────────────────────────────────────────────────
+
+    def _start_morning_flow(self):
+        if not mb.has_preferences():
+            self._ask_for_topics()
+        elif not mb.already_shown_today():
+            self._show_morning_brief()
+        else:
+            self._add_system_message("Good to see you again! How can I help?")
+
+    def _ask_for_topics(self):
+        self.state = "asking_topics"
+        question = ("🌅 Good morning! Before we begin —\n"
+                    "What topics do you want in your daily morning brief?\n"
+                    "Example: AI news, cricket, crypto, Pakistan tech...\n\n"
+                    "Just type or speak!")
+        self._add_brief_card(question)
+        speaker.speak("Good morning! What topics would you like in your daily morning news brief?")
+
+    def _show_morning_brief(self):
+        self._add_system_message("☀️ Fetching your morning brief...")
+        self._set_status("Loading morning brief...", WARNING)
+        threading.Thread(target=self._generate_brief_thread, daemon=True).start()
+
+    def _generate_brief_thread(self):
+        prefs = mb.get_preferences()
+        topics = prefs.get("topics", ["tech news"])
+        lang = prefs.get("language", "en")
+        try:
+            brief = mb.generate_brief(topics, lang)
+            mb.mark_shown_today()
+            self.ui_queue.put(("morning_brief", brief, topics))
+        except Exception as e:
+            self.ui_queue.put(("morning_brief_error", str(e)))
+
+    def _add_brief_card(self, text: str):
+        outer = tk.Frame(self.chat_inner, bg=BG_DARK, pady=10)
+        outer.pack(fill=tk.X, padx=16)
+        header = tk.Frame(outer, bg="#12211a")
+        header.pack(fill=tk.X)
+        tk.Label(header, text=f"☀️ Morning Brief — {datetime.now().strftime('%B %d, %Y')}",
+                 bg="#12211a", fg="#2ecc71",
+                 font=("Segoe UI", 10, "bold"), padx=14, pady=8).pack(side=tk.LEFT)
+        body = tk.Frame(outer, bg="#12211a", padx=14, pady=12)
+        body.pack(fill=tk.X)
+        tk.Message(body, text=text, bg="#12211a", fg=TEXT_PRI,
+                   font=("Segoe UI", 12), relief=tk.FLAT, width=680,
+                   justify=tk.LEFT).pack(fill=tk.X)
+        tk.Frame(outer, bg="#2ecc71", height=2).pack(fill=tk.X)
+        self.root.after(50, lambda: self.chat_canvas.yview_moveto(1.0))
+
+    def _handle_topic_input(self, text: str):
+        self._add_bubble(text, "user")
+        self.state = "normal"
+        def _save():
+            topics = mb.extract_topics_from_message(text)
+            mb.save_preferences(topics, "en")
+            msg = f"Got it! Morning brief will cover: {', '.join(topics)}. Generating your first brief now..."
+            self.ui_queue.put(("assistant_msg", msg))
+            speaker.speak(msg)
+            import time; time.sleep(1)
+            self.ui_queue.put(("trigger_brief", None))
+        threading.Thread(target=_save, daemon=True).start()
+
+    # ── Chat UI ───────────────────────────────────────────────────────────────
 
     def _add_bubble(self, text: str, role: str, meta: str = ""):
         outer = tk.Frame(self.chat_inner, bg=BG_DARK, pady=6)
@@ -168,12 +258,17 @@ class AssistantApp:
         self.status_label.config(text=text, fg=color)
         self.status_dot.config(fg=color)
 
+    # ── Input ─────────────────────────────────────────────────────────────────
+
     def _on_send(self, event=None):
         text = self.text_input.get().strip()
         if not text or self.is_processing:
             return
         self.text_input.delete(0, tk.END)
-        self._process_input(text)
+        if self.state == "asking_topics":
+            self._handle_topic_input(text)
+        else:
+            self._process_input(text)
 
     def _clear_chat(self):
         for widget in self.chat_inner.winfo_children():
@@ -204,7 +299,10 @@ class AssistantApp:
             self.ui_queue.put(("mic_active", False))
 
         if text:
-            self.ui_queue.put(("process", text))
+            if self.state == "asking_topics":
+                self.ui_queue.put(("topic_input", text))
+            else:
+                self.ui_queue.put(("process", text))
         else:
             self.ui_queue.put(("status", "Nothing heard. Try again.", TEXT_HINT))
 
@@ -240,6 +338,8 @@ class AssistantApp:
             )
         )
 
+    # ── Queue ─────────────────────────────────────────────────────────────────
+
     def _poll_queue(self):
         try:
             while True:
@@ -252,6 +352,10 @@ class AssistantApp:
                                         text="⬛" if item[1] else "🎤")
                 elif cmd == "process":
                     self._process_input(item[1])
+                elif cmd == "topic_input":
+                    self._handle_topic_input(item[1])
+                elif cmd == "assistant_msg":
+                    self._add_bubble(item[1], "assistant")
                 elif cmd == "tool_msg":
                     self._add_bubble(item[1], "tool", item[2])
                 elif cmd == "reply":
@@ -260,6 +364,17 @@ class AssistantApp:
                 elif cmd == "enable_input":
                     self.send_btn.config(state=tk.NORMAL)
                     self.mic_btn.config(state=tk.NORMAL)
+                elif cmd == "morning_brief":
+                    brief_text, topics = item[1], item[2]
+                    self._add_brief_card(brief_text)
+                    self._set_status("Ready", TEXT_HINT)
+                    self.state = "normal"
+                    self._add_system_message(f"Topics: {', '.join(topics)} · Say 'change my brief topics' to update")
+                    speaker.speak(brief_text)
+                elif cmd == "morning_brief_error":
+                    self._add_system_message(f"Could not load brief: {item[1]}")
+                elif cmd == "trigger_brief":
+                    self._show_morning_brief()
                 elif cmd == "reminder_fire":
                     self._add_system_message(f"⏰ Reminder: {item[1]}")
                     speaker.speak(f"Reminder: {item[1]}")
